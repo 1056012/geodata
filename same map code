@@ -1,0 +1,417 @@
+```{r}
+#Install the needed packages 
+#install.packages('dismo')  
+#install.packages('rworldmap')
+#install.packages('sf')
+#install.packages('geodata')
+#install.packages("raster")
+```
+
+```{r, warning=FALSE}
+#Load the packages 
+library(dismo)
+library(rworldmap)
+library(sf)
+library(geodata)
+library(raster)
+```
+```{r}
+#Loading the world map
+wrld_simpl<-getMap(resolution = "coarse")
+```
+
+### Question 1
+
+## Run linear models to predict the present-day distribution of species 1 (Panthera leo) using climate variables and use them to present a map of its current distribution.
+
+```{r, warning= FALSE, results='hide'}
+#Accessing the data 
+lion.gbif <- gbif("Panthera","leo", geo=TRUE)
+```
+
+```{r}
+#pulling out the lat and lon columns from the data 
+lion.coords<-cbind(lion.gbif$lon,lion.gbif$lat)
+#deleting rows with missing data (NA)
+lion.coords<-na.omit(lion.coords)
+lion.coords<-data.frame(lion.coords)
+colnames(lion.coords)<-c("lon","lat")
+```
+
+```{r}
+#Plot the species distribution
+plot(wrld_simpl, xlim=range(lion.coords$lon), ylim=range(lion.coords$lat), axes=TRUE, col="lightyellow")
+	points(lion.coords, col='red', cex=0.75)
+```
+
+Trimming the data to the natural habitat range - The continent of Africa
+```{r}
+	trim.coords<-function (x,latmin,latmax,lonmin,lonmax) {
+			if (sum(x$lon < lonmin)>0) {
+			tmp<-which(x$lon < lonmin)
+			x<-x[-tmp,]}
+				if (sum(x$lon > lonmax)>0) {
+				tmp<-which(x$lon > lonmax)
+				x<-x[-tmp,]}
+					if (sum(x$lat < latmin)>0) {
+					tmp<-which(x$lat < latmin)
+					x<-x[-tmp,]}
+						if (sum(x$lat > latmax)>0) {
+						tmp<-which(x$lat > latmax)
+						x<-x[-tmp,]}
+				return(x) }
+
+#Using function to make a new table of coordinates within Africa
+lion.coords.trim<-trim.coords(lion.coords,latmin=-40,latmax=40,lonmin=-20,lonmax=55)
+
+#Using this version for the coordinates
+lion.coords<-lion.coords.trim
+```
+
+```{r, warning=FALSE, results='hide'}
+#To remove points in the sea
+URL <- "https://www.naturalearthdata.com/http//www.naturalearthdata.com/download/110m/physical/ne_110m_ocean.zip"
+fil <- basename(URL)
+if (!file.exists(fil)) download.file(URL, fil)
+fils <- unzip(fil)
+
+oceans <- read_sf(grep("shp$", fils, value=TRUE))
+
+#convert the locality points into an equivilent format
+lion.coords<- st_as_sf(lion.coords,coords=c("lon","lat"))
+st_crs(lion.coords) <- st_crs(oceans)
+sf_use_s2(FALSE)
+
+#Finding points that overlap with the sea
+tmp<-sapply(st_intersects(lion.coords,oceans), function(z) if (length(z)==0) NA_integer_ else z[1])
+
+#Removing the points that do overlap with the sea. 
+if (sum(!is.na(tmp))>0) {
+	lion.coords<-data.frame(st_coordinates(lion.coords[is.na(tmp),]))} else {
+		lion.coords<-data.frame(st_coordinates(lion.coords))}
+	colnames(lion.coords)<-c("lon","lat")
+
+```
+
+```{r, echo=FALSE, results='hide'}
+#Plotting to check
+	plot(wrld_simpl, xlim=range(lion.coords$lon), ylim=range(lion.coords$lat), axes=TRUE, col="light yellow")
+	points(lion.coords, col='red', cex=0.75)
+```
+
+```{r}
+#Accessing climate data
+bio.data<-worldclim_global(var="bio",res=10,path="C:/Users/shath/Desktop/Geodata Assignment")
+names(bio.data)<-paste0("bio",1:19)
+```
+
+
+```{r, results='hide'}
+#Extracting climate data for the where the lions are found 
+bio.values1 <- extract(bio.data, lion.coords)[,-1]
+rownames(bio.values)<-rownames(lion.coords)
+```
+
+
+```{r, results='hide'}
+lion.data<-cbind(lion.coords,bio.values1)
+##remove any rows with missing data
+lion.data<-na.omit(lion.data)
+
+#saving the file
+write.csv(lion.data,file="lion.data.csv")
+```
+
+```{r, echo=FALSE, results='hide'}
+#Preparation for linear models
+pairs(bio.values1[,1:5])
+pairs(bio.values1[,6:10])
+```
+```{r, echo=FALSE, results='hide'}
+#Gathering mean, minimum and maximum values 
+
+rbind(mean=colMeans(lion.data),
+min=apply(lion.data, 2, min),
+max=apply(lion.data, 2, max))
+```
+
+```{r}
+#Making random points for the background points of the region
+#This is to make the shaded region on the map
+ext <- extent(wrld_simpl)
+xy <- abs(apply(as.matrix(bbox(ext)), 1, diff))
+n <- 5
+r <- raster(ext, ncol=xy[1]*n, nrow=xy[2]*n)
+mask <-rasterize(wrld_simpl, r)
+```
+
+
+```{r}
+plot(mask, axes = TRUE, col= "lightgrey",
+     xlim= c(-15, 50),
+     ylim= c(-40, 20)); box()
+points(lion.coords, col="red", pch=20, cex=1)
+
+#Setting an area of extent for considering background using this new range
+e <- extent(-15, 50, -40,20)
+plot(e, add=TRUE, col='black')
+##this generates 500 random points within that area
+bg1 <- randomPoints(mask, 500, ext=e,extf=1)
+points(bg1, col="black", pch=20)
+colnames(bg1)<-c("lon","lat")
+```
+
+```{r, results='hide'}
+#Cropping biodata to just include the data for this region
+bio.data<-crop(bio.data,e)
+```
+
+```{r, results='hide'}
+#combining the presence data and the background data in one table
+table1 <- rbind(lion.coords, bg1)
+#And make a vector record 1=presence, 0=background
+pb_table1 <- c(rep(1, nrow(lion.coords)), rep(0, nrow(bg1)))
+##extract bioclimatic data for these points
+envtable1 <- extract(bio.data, table1)
+envtable1 <- data.frame(cbind(pa1=pb_table1, envtable1))
+testpres1 <- data.frame( extract(bio.data, lion.coords))
+testbackg1 <- data.frame( extract(bio.data, bg1) )
+```
+```{r}
+##Im pretty sure this plot is the same as the one above
+plot(mask, axes= TRUE, col="lightgrey",
+     xlim =c(-15, 50),
+     ylim =c(-40, 20));box()
+points(lion.coords, col ="red", pch= 20, cex=1)
+
+plot(e, add=TRUE, col='black')
+points(bg1,col="black", pch=20)
+```
+
+```{r}
+##Fitting glm for the first five bio data
+gm1 <- glm(pa1 ~ bio1 + bio2 + bio3 + bio4 + bio5,
+     family = binomial(link = "logit"), data=envtable1)
+summary(gm1)
+```
+
+```{r}
+pg1 <- predict(bio.data, gm1, ext=e,type="response") 
+pg1<-crop(pg1,e)
+```
+
+```{r}
+ge1 <- evaluate(testpres1, testbackg1, gm1) #ge1_5
+ge1
+#use this evaluation to pick a threshold probability for defining presence/absence
+#using the model that gives the most accurate match to observed presence/absence
+tr1 <- threshold(ge1, 'prevalence') #tr1_5
+```
+
+```{r}
+#representing the probability of occurrence from our linear model, for or area of extent e
+par(mfrow = c(1,2))
+plot(pg1, main='GLM probability of occurrence of lions bio1-5')
+plot(wrld_simpl, add=TRUE, border='dark grey') 
+points(lion.coords,col = "black", pch = 4, cex = 0.5)
+
+##This is coming the giving the same plot
+```
+
+
+```{r}
+#Running linear models to figure out the best predictors for lion distribution
+#Using a loop to compare between different models 
+#variable_names <- paste0("bio", 1:19)
+#predictor_performance <- vector("list", length(variable_names))
+
+```
+
+```{r}
+#for (i in 1:length(variable_names)) {
+  # fit the linear model
+  #lm_model <- lm(pa1 ~ get(variable_names[i]), data = envtable1)
+  # calculate the model performance
+ # predictor_performance[[i]] <- AIC(lm_model)
+#}
+```
+
+```{r, results='hide'}
+#Printing the model performance for each variable 
+#names(predictor_performance) <- variable_names
+#print(predictor_performance)
+
+#Identifying the best model 
+#best_model <- which.min(predictor_performance)
+#print(paste0("The best bioclimate variable is ", variable_names[best_model]))
+#Best predictor is bio9
+```
+
+```{r}
+#Running a linear model with the first 5  predictors 
+gm1 <- glm(pa1 ~ bio1 + bio2 + bio3 + bio4 +bio5, 
+family = binomial(link = "logit"), data=envtable1)
+summary(gm1)
+```
+
+```{r}
+#predict the occurence probability using the GLM model
+pred1 <- predict(gm1, pg1, type= "response")
+
+#plot the predicted distribution
+plot(pred1, main='GLM probability of occurrence in lions')
+plot(wrld_simpl, add=TRUE, border= 'dark grey')
+points(lion.coords, col= "black", pch=4, cex=0.5)
+```
+
+```{r}
+#Plotting the distribution based on best predictors
+pg1 <- predict(bio.data, gm1, ext=e,type="response")
+pg1<-crop(pg1,e)
+
+plot(pg1, main='GLM probability of occurrence in lions')
+plot(wrld_simpl, add=TRUE, border='dark grey')
+points(lion.coords,col = "black", pch = 4, cex = 0.5)
+```
+
+## Which set of climatic variables best explain the current distribution of the species?
+### Question 2
+
+## Run linear models to predict the present-day distribution of species 2 (Equus quagga) using climate variables and use them to present maps of its current distribution.
+
+```{r, warning= FALSE}
+#Accessing the data 
+zebra.gbif <- gbif("Equus","quagga", geo=TRUE)
+```
+
+```{r}
+#pulling out the lat and lon columns 
+zebra.coords<-cbind(zebra.gbif$lon,zebra.gbif$lat)
+#deleting rows with missing data (NA)
+zebra.coords<-na.omit(zebra.coords)
+zebra.coords<-data.frame(zebra.coords)
+colnames(zebra.coords)<-c("lon","lat")
+```
+
+```{r}
+#Using the same trimming function to trim the coordinates of the zebra data to within Africa
+#The natural habitat of the zebra is in East and Southern Africa
+zebra.coords.trim<-trim.coords(zebra.coords,latmin=-40,latmax=40,lonmin=-20,lonmax=55)
+
+#Using this version for the coordinates
+zebra.coords<-zebra.coords.trim
+```
+
+```{r, warning=FALSE}
+#convert the locality points into an equivilent format
+zebra.coords<- st_as_sf(zebra.coords,coords=c("lon","lat"))
+st_crs(zebra.coords) <- st_crs(oceans)
+sf_use_s2(FALSE)
+
+#Finding points that overlap with the sea
+tmp<-sapply(st_intersects(zebra.coords,oceans), function(z) if (length(z)==0) NA_integer_ else z[1])
+
+#Removing the points that do overlap with the sea. 
+if (sum(!is.na(tmp))>0) {
+	zebra.coords<-data.frame(st_coordinates(zebra.coords[is.na(tmp),]))} else {
+		zebra.coords<-data.frame(st_coordinates(zebra.coords))}
+	colnames(zebra.coords)<-c("lon","lat")
+
+	
+	#convert the locality points into an equivilent format
+lion.coords<- st_as_sf(lion.coords,coords=c("lon","lat"))
+st_crs(lion.coords) <- st_crs(oceans)
+sf_use_s2(FALSE)
+
+```
+
+```{r}
+#Extracting climate data for the where the zebra are found 
+bio.values2 <- extract(bio.data, zebra.coords)[,-1]
+rownames(bio.values2)<-rownames(zebra.coords)
+
+zebra.data<-cbind(zebra.coords,bio.values2)
+##remove any rows with missing data
+zebra.data<-na.omit(zebra.data)
+
+#saving the file
+write.csv(zebra.data,file="zebra.data.csv")
+
+#extracting mean values, min and max
+rbind(mean=colMeans(zebra.data),
+min=apply(zebra.data, 2, min),
+max=apply(zebra.data, 2, max))
+```
+
+```{r}
+#Limiting the range of the background points
+plot(mask, axes = TRUE, col = "grey",
+xlim = c(-15, 50),
+ylim = c(-40,20)); box()
+points(zebra.coords,col = "red", pch = 20, cex = 1)
+
+#Setting an area of extent for considering background using this new range
+e <- extent(-15, 50, -40,20)
+plot(e, add=TRUE, col='black')
+#This is generating 500 random points within that area
+bg2 <- randomPoints(mask, 500, ext=e,extf=1)
+points(bg2,col="black", pch=20)
+colnames(bg2)<-c("lon","lat")
+```
+
+```{r}
+#Combining the presence data and the background data in one table
+table2 <- rbind(zebra.coords, bg2)
+#And make a vector record 1=presence, 0=background
+pb_table2 <- c(rep(1, nrow(zebra.coords)), rep(0, nrow(bg2)))
+#Extract bioclimatic data for these points
+envtable2 <- extract(bio.data, table2)
+envtable2 <- data.frame(cbind(pa2=pb_table2, envtable2) )
+##and for each set separately
+testpres2 <- data.frame( extract(bio.data, zebra.coords) )
+testbackg2 <- data.frame( extract(bio.data, bg2) )
+```
+
+```{r}
+#Running linear models to figure out the best predictors for zebra distribution
+#Using a loop to compare between different models 
+variable_names2 <- paste0("bio", 1:19)
+predictor_performance2 <- vector("list", length(variable_names2))
+
+```
+
+```{r}
+for (i in 1:length(variable_names2)) {
+  # fit the linear model
+  lm_model2 <- lm(pa2 ~ get(variable_names2[i]), data = envtable2)
+  # calculate the model performance
+  predictor_performance2[[i]] <- AIC(lm_model2)
+}
+```
+
+```{r}
+#Printing the model performance for each variable 
+names(predictor_performance2) <- variable_names2
+print(predictor_performance2)
+
+#Identifying the best model 
+best_model2 <- which.min(predictor_performance2)
+print(paste0("The best bioclimate variable is ", variable_names2[best_model2]))
+```
+
+```{r}
+#Running a linear model with the first 5 best predictors 
+gm2 <- glm(pa2 ~ bio9 + bio1 + bio11 + bio5 +bio10, 
+family = binomial(link = "logit"), data=envtable2)
+```
+
+```{r}
+#Drawing the distribution based on the predictors
+#Plotting the distribution based on best predictors
+pg2 <- predict(bio.data, gm2, ext=e,type="response")
+pg2<-crop(pg2,e)
+
+plot(pg2, main='GLM probability of occurrence in zebra')
+plot(wrld_simpl, add=TRUE, border='dark grey')
+points(zebra.coords,col = "black", pch = 4, cex = 0.5)
+```
