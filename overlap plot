@@ -1,0 +1,23 @@
+## Question 3 - part2
+### Devise and calculate a metric for the degree of overlap between their ranges, explaining how you calculated it.
+
+```{r, warning=FALSE}
+#Creating SpatialPoints for lion coordinates
+lion_sp <- SpatialPoints(coords = lion.coords[, c("lon", "lat")])
+
+#Creating SpatialPoints for zebra coordinates
+zebra_sp <- SpatialPoints(coords = zebra.coords[, c("lon", "lat")])
+
+#Finding the intersection of the two SpatialPoints objects
+intersect_sp <- gIntersection(lion_sp, zebra_sp)
+
+#Calculating the percentage overlap between the lion and zebra ranges
+lion_range_area <- gArea(gConvexHull(lion_sp))
+
+zebra_range_area <- gArea(gConvexHull(zebra_sp))
+overlap_area <- gArea(gConvexHull(intersect_sp))
+overlap_pct <- overlap_area / (lion_range_area + zebra_range_area - overlap_area) * 100
+
+#Display result
+overlap_pct
+```
