@@ -17,7 +17,9 @@ lion_range_area <- gArea(gConvexHull(lion_sp))
 zebra_range_area <- gArea(gConvexHull(zebra_sp))
 overlap_area <- gArea(gConvexHull(intersect_sp))
 overlap_pct <- overlap_area / (lion_range_area + zebra_range_area - overlap_area) * 100
+#Here I calculate the percentage overlap
 
 #Display result
 overlap_pct
+
 ```
